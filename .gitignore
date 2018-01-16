@@ -2,3 +2,6 @@ coverage.txt
 .idea
 pkgcoverage.txt
 tiedot
+ttt/
+vendor/
+Gopkg.*
