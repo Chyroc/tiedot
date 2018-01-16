@@ -113,6 +113,7 @@ func GetPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	docs := make(map[string]interface{})
+	// 循环执行函数
 	dbcol.ForEachDocInPage(pageNum, totalPage, func(id int, doc []byte) bool {
 		var docObj map[string]interface{}
 		if err := json.Unmarshal(doc, &docObj); err == nil {

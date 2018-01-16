@@ -27,14 +27,16 @@ const (
 
 // Database structures.
 type DB struct {
+	// 配置
 	Config     *data.Config
+
+	// db文件夹路径
 	path       string          // Root path of database directory
 
-	// 默认为8
+	// 默认为8，cpu核数
 	numParts   int             // Total number of partitions
 
-	// 内存里面的coll，应该还有机制将数据从local读到内存
-	// map结果，key是col的名字
+	// map，key是col的名字，value是数据
 	cols       map[string]*Col // All collections
 
 	// 这个lock是对访问col加锁的
@@ -44,6 +46,7 @@ type DB struct {
 // Open database and load all collections & indexes.
 // 加载数据到内存（col+索引）
 func OpenDB(dbPath string) (*DB, error) {
+	// 初始化随机种子
 	rand.Seed(time.Now().UnixNano()) // document ID generation relies on this RNG
 	d, err := data.CreateOrReadConfig(dbPath)
 	if err != nil {
@@ -55,6 +58,7 @@ func OpenDB(dbPath string) (*DB, error) {
 }
 
 // Load all collection schema.
+// 加载所有的数据
 func (db *DB) load() error {
 	// Create DB directory and PART_NUM_FILE if necessary
 	// 根据需要创建数据库目录和分区文件
@@ -113,12 +117,16 @@ func (db *DB) load() error {
 }
 
 // Close all database files. Do not use the DB afterwards!
-// db close，循环所有的col，close
+// 关闭数据库链接
+// 循环关闭所有的doc和index链接
 func (db *DB) Close() error {
 	db.schemaLock.Lock()
 	defer db.schemaLock.Unlock()
 	errs := make([]error, 0, 0)
+
+	// 循环所有的cols，取value
 	for _, col := range db.cols {
+		// 关闭col
 		if err := col.close(); err != nil {
 			errs = append(errs, err)
 		}
@@ -130,6 +138,7 @@ func (db *DB) Close() error {
 }
 
 // create creates collection files. The function does not place a schema lock.
+// 创建数据库col
 func (db *DB) create(name string) error {
 	if _, exists := db.cols[name]; exists {
 		// 首先内存里面col不能存在
@@ -145,7 +154,7 @@ func (db *DB) create(name string) error {
 }
 
 // Create a new collection.
-// 创建 col
+// 创建数据库col
 func (db *DB) Create(name string) error {
 	db.schemaLock.Lock()
 	defer db.schemaLock.Unlock()
@@ -153,10 +162,12 @@ func (db *DB) Create(name string) error {
 }
 
 // Return all collection names.
+// 返回所有的col的名字
 func (db *DB) AllCols() (ret []string) {
 	db.schemaLock.RLock()
 	defer db.schemaLock.RUnlock()
 	ret = make([]string, 0, len(db.cols))
+	// 循环 cols，取key
 	for name := range db.cols {
 		ret = append(ret, name)
 	}
@@ -226,25 +237,33 @@ func (db *DB) Truncate(name string) error {
 }
 
 // Scrub a collection - fix corrupted documents and de-fragment free space.
-// 修复数据
+// 修复数据，使得数据里面的数据紧凑
+// 创建临时col，然后循环老数据，将数据插入临时col（这个时候，没有空间浪费），然后将临时col的文件数据当做新的数据，删除老文件
 func (db *DB) Scrub(name string) error {
 	db.schemaLock.Lock()
 	defer db.schemaLock.Unlock()
+	// 确保col存在
 	if _, exists := db.cols[name]; !exists {
 		return fmt.Errorf("Collection %s does not exist", name)
 	}
+
+	// 创建一个临时的col
 	// Prepare a temporary collection in file system
 	tmpColName := fmt.Sprintf("scrub-%s-%d", name, time.Now().UnixNano())
 	tmpColDir := path.Join(db.path, tmpColName)
 	if err := os.MkdirAll(tmpColDir, 0700); err != nil {
 		return err
 	}
+
+	// 对于索引数据，在临时col里面，创建文件夹
 	// Mirror indexes from original collection
 	for _, idxPath := range db.cols[name].indexPaths {
 		if err := os.MkdirAll(path.Join(tmpColDir, strings.Join(idxPath, INDEX_PATH_SEP)), 0700); err != nil {
 			return err
 		}
 	}
+
+	// 将数据复制到临时col里面
 	// Iterate through all documents and put them into the temporary collection
 	tmpCol, err := OpenCol(db, tmpColName)
 	if err != nil {
@@ -256,22 +275,31 @@ func (db *DB) Scrub(name string) error {
 			// Skip corrupted document
 			return true
 		}
+
+		// 通过指定的 doc id插入老数据
 		if err := tmpCol.InsertRecovery(id, docObj); err != nil {
 			tdlog.Noticef("Scrub %s: failed to insert back document %v", name, docObj)
 		}
 		return true
 	}, false)
+	// 然后关闭临时col，存盘文件
 	if err := tmpCol.close(); err != nil {
 		return err
 	}
+
+	// 然后替换col
 	// Replace the original collection with the "temporary" one
+	// 先关闭文件
 	db.cols[name].close()
+	// 删除文件
 	if err := os.RemoveAll(path.Join(db.path, name)); err != nil {
 		return err
 	}
+	// 文件改名
 	if err := os.Rename(path.Join(db.path, tmpColName), path.Join(db.path, name)); err != nil {
 		return err
 	}
+	// 打开文件
 	if db.cols[name], err = OpenCol(db, name); err != nil {
 		return err
 	}
@@ -279,7 +307,7 @@ func (db *DB) Scrub(name string) error {
 }
 
 // Drop a collection and lose all of its documents and indexes.
-// 先要有，
+// 删除数据库col
 func (db *DB) Drop(name string) error {
 	db.schemaLock.Lock()
 	defer db.schemaLock.Unlock()
@@ -299,14 +327,19 @@ func (db *DB) Drop(name string) error {
 }
 
 // Copy this database into destination directory (for backup).
+// 将数据导出为文件，备份
 func (db *DB) Dump(dest string) error {
 	db.schemaLock.Lock()
 	defer db.schemaLock.Unlock()
+
+	// 创建导出函数
 	cpFun := func(currPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
+
 		if info.IsDir() {
+			// 目录
 			relPath, err := filepath.Rel(db.path, currPath)
 			if err != nil {
 				return err
@@ -317,6 +350,7 @@ func (db *DB) Dump(dest string) error {
 			}
 			tdlog.Noticef("Dump: created directory %s", destDir)
 		} else {
+			// 文件
 			src, err := os.Open(currPath)
 			if err != nil {
 				return err
@@ -341,6 +375,8 @@ func (db *DB) Dump(dest string) error {
 		}
 		return nil
 	}
+
+	// 然后循环文件夹，使用本函数
 	return filepath.Walk(db.path, cpFun)
 }
 

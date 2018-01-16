@@ -118,6 +118,7 @@ func (col *Col) unindexDoc(id int, doc map[string]interface{}) {
 }
 
 // Insert a document with the specified ID into the collection (incl. index). Does not place partition/schema lock.
+// 通过指定的 doc id插入数据
 func (col *Col) InsertRecovery(id int, doc map[string]interface{}) (err error) {
 	docJS, err := json.Marshal(doc)
 	if err != nil {

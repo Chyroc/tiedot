@@ -16,6 +16,32 @@
 // 每个桶都有固定数量的条目。 当一个桶变满时，为了存储更多的条目，一个新的桶被链接到它。 每个条目都有一个整数键和值。
 // 一个入口键可以有多个值分配给它，但是入口键和值的组合在整个散列表中必须是唯一的。
 
+/*
+（以id开头的文件，以及索引文件）
+
+bucket:
+
++----------------------------------------------------+
+| next bucket addr | entry1 | entry2 | ... | entry16 |
+0 ---------------- 10------31-------52-------------346
+
+因为bucket含有下一个bucket的地址，所以实际上bucket的结构是bucket链
+所以bucket链然后组成了哈希表
+在哈希表的层级上，可以认为是entry链
+
+entry:
+
++--------------------+
+| flag | key | value |
+0------1----11------21
+
+这里涉及到一个bucket id，一个entry id
+entry id是连续的，可以推算
+bucket链上的都可以算出来，第一个通过 hash(key) [HashKey(key int) int]计算，或者从 0 开始死循环计算
+因为哈希函数返回值在0-65535之间，所以所有的bucket链的第一个地址都在这个之间
+超过这个地址的所有bucket挂载在其他bucket之后
+*/
+
 package data
 
 import (
@@ -42,6 +68,7 @@ type HashTable struct {
 }
 
 // Open a hash table file.
+// 从文件加载哈希表
 func (conf *Config) OpenHashTable(path string) (ht *HashTable, err error) {
 	ht = &HashTable{Config: conf, Lock: new(sync.RWMutex)}
 
@@ -49,7 +76,6 @@ func (conf *Config) OpenHashTable(path string) (ht *HashTable, err error) {
 	if ht.DataFile, err = OpenDataFile(path, ht.HTFileGrowth); err != nil {
 		return
 	}
-	// 计算
 	conf.CalculateConfigConstants()
 	// 计算哈希文件已用大小
 	ht.calculateNumBuckets()
@@ -57,19 +83,34 @@ func (conf *Config) OpenHashTable(path string) (ht *HashTable, err error) {
 }
 
 // Follow the longest bucket chain to calculate total number of buckets, hence the "used size" of hash table file.
+// 按照最长的桶链计算桶的总数，从而计算哈希表文件的“已用大小”。
 func (ht *HashTable) calculateNumBuckets() {
+	// 计算已经使用的bucket数量
 	ht.numBuckets = ht.Size / ht.BucketSize
+	// largestBucketNum = 初始化的bucket数量-1
 	largestBucketNum := ht.InitialBuckets - 1
+
+	// 循环，0 - largestBucketNum
+	// 最后计算真正的largestBucketNum
 	for i := 0; i < ht.InitialBuckets; i++ {
 		lastBucket := ht.lastBucket(i)
 		if lastBucket > largestBucketNum && lastBucket < ht.numBuckets {
 			largestBucketNum = lastBucket
 		}
 	}
+
+	// 然后 numBuckets = largestBucketNum + 1
 	ht.numBuckets = largestBucketNum + 1
+
+	// 计算已经使用的大小
 	usedSize := ht.numBuckets * ht.BucketSize
+
+	// ht.Used 设为 min(usedSize, ht.Size)
 	if usedSize > ht.Size {
 		ht.Used = ht.Size
+
+		// 如果已经使用的大小比文件的大小还要大
+		// 输入两者的插，调用 EnsureSize
 		ht.EnsureSize(usedSize - ht.Used)
 	}
 	ht.Used = usedSize
@@ -77,6 +118,7 @@ func (ht *HashTable) calculateNumBuckets() {
 }
 
 // Return number of the next chained bucket.
+// 计算bucket的头部存储的下一个的bucket的地址
 // 返回 bucket链的下一个
 // bucket 表示取第几个bucket
 // bucket * ht.BucketSize 表示 在哈希表的二进制数据里面，第几个字节
@@ -85,7 +127,6 @@ func (ht *HashTable) calculateNumBuckets() {
 // 也就是hash map
 func (ht *HashTable) nextBucket(bucket int) int {
 	if bucket >= ht.numBuckets {
-		// bucket 也有限制
 		return 0
 	}
 
@@ -118,6 +159,7 @@ func (ht *HashTable) lastBucket(bucket int) int {
 }
 
 // Create and chain a new bucket.
+// 创建一个bucket，然后链接到bucket链上
 func (ht *HashTable) growBucket(bucket int) {
 	// 确认大小
 	ht.EnsureSize(ht.BucketSize)
@@ -193,7 +235,6 @@ func (ht *HashTable) Put(key, val int) {
 
 // Look up values by key.
 // 根据 id 取 对应的值，可选个数
-// todo
 func (ht *HashTable) Get(key, limit int) (vals []int) {
 	// 根据 doc id 查 col id的话，limit就是1
 	if limit == 0 {
@@ -275,9 +316,16 @@ func (ht *HashTable) Remove(key, val int) {
 }
 
 // Divide the entire hash table into roughly equally sized partitions, and return the start/end key range of the chosen partition.
+// 将整个散列表分成几乎相同大小的分区，并返回所选分区的开始/结束键范围。
+// 返回bucket开始的序号和结束的序号，差就是他们所包含的bucket的数量
+// todo xxxx
 func (conf *Config) GetPartitionRange(partNum, totalParts int) (start int, end int) {
+	// perPart 一共多少份      leftOver 是剩下的bucket的数量
+	// 65536 / totalParts     65536 % totalParts
+	// 为什么要用 conf.InitialBuckets 除呢，（参见本文件最上面），因为哈希函数返回的值在0-65535之间，所以所有的bucket链的第一个bucket都在这个区间
 	perPart := conf.InitialBuckets / totalParts
 	leftOver := conf.InitialBuckets % totalParts
+
 	start = partNum * perPart
 	if leftOver > 0 {
 		if partNum == 0 {
@@ -289,6 +337,8 @@ func (conf *Config) GetPartitionRange(partNum, totalParts int) (start int, end i
 			start += leftOver
 		}
 	}
+
+	// 开始结束之间差了一个 perPart
 	end += start + perPart
 	if partNum == totalParts-1 {
 		end = conf.InitialBuckets
@@ -297,20 +347,31 @@ func (conf *Config) GetPartitionRange(partNum, totalParts int) (start int, end i
 }
 
 // Collect entries all the way from "head" bucket to the end of its chained buckets.
+// 获取「bucket以及所有连接在它后面的bucket」内所有的entry，返回key和value的数组
 func (ht *HashTable) collectEntries(head int) (keys, vals []int) {
+	// 初始化变量
 	keys = make([]int, 0, ht.PerBucket)
 	vals = make([]int, 0, ht.PerBucket)
 	var entry, bucket int = 0, head
+
+	// 死循环
 	for {
+		// 在死循环中，会取到每一个entry的开始地址
 		entryAddr := bucket*ht.BucketSize + BucketHeader + entry*EntrySize
+
+		// 取key和value
 		entryKey, _ := binary.Varint(ht.Buf[entryAddr+1: entryAddr+11])
 		entryVal, _ := binary.Varint(ht.Buf[entryAddr+11: entryAddr+21])
+
+		// 如果有效
 		if ht.Buf[entryAddr] == 1 {
 			keys = append(keys, int(entryKey))
 			vals = append(vals, int(entryVal))
 		} else if entryKey == 0 && entryVal == 0 {
 			return
 		}
+
+		// 取到下一个bucket以及下一个entry
 		if entry++; entry == ht.PerBucket {
 			entry = 0
 			if bucket = ht.nextBucket(bucket); bucket == 0 {
@@ -321,12 +382,19 @@ func (ht *HashTable) collectEntries(head int) (keys, vals []int) {
 }
 
 // Return all entries in the chosen partition.
+// 返回一个文件块中从第partNum到第partSize的entry的数量
 func (ht *HashTable) GetPartition(partNum, partSize int) (keys, vals []int) {
+	// 在这个范围内开始和结束的bucket的序号
 	rangeStart, rangeEnd := ht.GetPartitionRange(partNum, partSize)
+
+	// 乘以一个bucket所包含的entry的数量，结果是：在这个范围内所包含的entry的数量
 	prealloc := (rangeEnd - rangeStart) * ht.PerBucket
 	keys = make([]int, 0, prealloc)
 	vals = make([]int, 0, prealloc)
+
+	// 循环所有的bucket，head就是bucket的序号
 	for head := rangeStart; head < rangeEnd; head++ {
+		// 取出这个bucket的entry的key和value
 		k, v := ht.collectEntries(head)
 		keys = append(keys, k...)
 		vals = append(vals, v...)

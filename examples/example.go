@@ -142,6 +142,8 @@ func EmbeddedExample() {
 	feeds.Insert(map[string]interface{}{"Title": "Kitkat is here", "Source": "google.com", "Age": 2})
 	feeds.Insert(map[string]interface{}{"Title": "Good Slackware", "Source": "slackware.com", "Age": 1})
 
+	feeds.ApproxDocCount()
+
 	var query interface{}
 	json.Unmarshal([]byte(`[{"eq": "New Go release", "in": ["Title"]}, {"eq": "slackware.com", "in": ["Source"]}]`), &query)
 
@@ -170,6 +172,9 @@ func EmbeddedExample() {
 // 原始函数
 // binary.PutVarint 将数字压缩存储到指定的byte中
 // binary.Varint 从指定的byte中将数字还原出来
+
+// 看不懂
+// GetPartitionRange
 
 /*
 Bucket与Entry数据结构说明

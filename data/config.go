@@ -59,10 +59,10 @@ type Config struct {
 }
 
 // CalculateConfigConstants assignes internal field values to calculation results derived from other fields.
+// 计算bucket的大小以及初始化的bucket的数量
 func (conf *Config) CalculateConfigConstants() {
 	// 因为doc存储的时候，会预留一部分空间（两倍），为了更新的时候可能的大小变化。
-	// 空格 就是用了填充剩下的预留的空间的
-	// 一个一个 Padding 的填充
+	// 空格 就是用了填充剩下的预留的空间的，一个一个 Padding 的填充
 	conf.Padding = strings.Repeat(" ", 128)
 	conf.LenPadding = len(conf.Padding)
 
@@ -147,11 +147,13 @@ func defaultConfig() *Config {
 		of space per computer CPU core being pre-allocated to each collection.
 	*/
 	ret := &Config{
+		// 一条doc最大的大小
 		DocMaxRoom: DefaultDocMaxRoom,
 
 		// 32M 空间
 		ColFileGrowth: COL_FILE_GROWTH,
 
+		// 每个bucket的entry的数量限制
 		PerBucket: 16,
 
 		HTFileGrowth: HT_FILE_GROWTH,

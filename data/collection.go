@@ -12,16 +12,30 @@
 // there is enough space, otherwise the original document is marked as deleted
 // and the updated document is inserted as a new document.
 
-//每个文档都有一个二进制头和UTF-8文本内容。
+// 每个文档都有一个二进制头和UTF-8文本内容。
 //
-//文件一个接一个插入，占用2个原文件大小为将来更新留下空间。
+// 文件一个接一个插入，占用2个原文件大小为将来更新留下空间。
 //
-//删除的文件被标记为已删除，空间不可恢复，直到
-//执行“清理”操作（在数据库逻辑中）。
+// 删除的文件被标记为已删除，空间不可恢复，直到
+// 执行“清理”操作（在数据库逻辑中）。
 //
-//发生更新时，如果新文档可能会覆盖原始文档
-//有足够的空间，否则将原始文档标记为已删除
-//并更新的文档作为新文档插入。
+// 发生更新时，如果新文档可能会覆盖原始文档
+// 有足够的空间，否则将原始文档标记为已删除
+// 并更新的文档作为新文档插入。
+/*
+col的数据结构（以dat开头的文件）
+
+doc:
+
++------------------------------------+
+| flag | doc length |    doc data    |
+0------1-----------11-----...------end
+
+新 id是col.Used
+所以刚开始是连续的，当有部分删除的时候，是跳跃的，可以重新调整
+id是记录在哈希表中的，值需要记住doc id就行了
+doc id是给人看的，没有记住的需求（人需要记住）
+*/
 
 package data
 
@@ -35,20 +49,25 @@ import (
 // col.Buf[id+1 : id+11] 存储这个数据的长度，假设为x
 // 那么真实的数据就是 header:header+x
 type Collection struct {
+	// 存数据
 	*DataFile
+
+	// 配置
 	*Config
 }
 
 // Open a collection file.
+// 打开一个 collection 文件
 func (conf *Config) OpenCollection(path string) (col *Collection, err error) {
-	// new col
 	col = new(Collection)
 
 	// 从文件中 读数据到 DataFile
 	col.DataFile, err = OpenDataFile(path, conf.ColFileGrowth)
 
-	// 下面是复制config
+	// 读config
 	col.Config = conf
+
+	// 计算bucket的大小以及初始化的bucket的数量
 	col.Config.CalculateConfigConstants()
 	return
 }
@@ -63,16 +82,13 @@ func (col *Collection) Read(id int) []byte {
 		// 取出数据大小，并确认不大于最大的单个doc 大小
 		return nil
 	} else if docEnd := id + DocHeader + int(room); docEnd >= col.Size {
-		// 计算doc结束的位置，等于：id+头长度+刚刚取出来的那个长度
-		// todo 然后确认大小大于
-		// id + DocHeader + int(room)
+		// 计算doc结束的位置，等于：id + DocHeader + int(room)
+		// 然后确认小于文件大小
 		return nil
 	} else {
-		// 然后使用id+头信息长度作为七点，取那么长的数据，返回
+		// 然后使用刚刚读出来的数据长度和起始字节地址，取出数据
 		docCopy := make([]byte, room)
-		// copy(docCopy, col.Buf[id+DocHeader:docEnd])
-		// room, _ := binary.Varint(col.Buf[id+1 : id+11])
-		copy(docCopy, col.Buf[id+DocHeader:id+DocHeader+int(room)])
+		copy(docCopy, col.Buf[id+DocHeader:docEnd])
 		return docCopy
 	}
 }
@@ -130,13 +146,13 @@ func (col *Collection) Update(id int, data []byte) (newID int, err error) {
 		return 0, dberr.New(dberr.ErrorNoDoc, id)
 	}
 
-	// 取出老的数据长度，并确认不大于最大的。。
+	// 取出老的数据长度，并确认不大于最大的doc大小
 	currentDocRoom, _ := binary.Varint(col.Buf[id+1: id+11])
 	if currentDocRoom > int64(col.DocMaxRoom) {
 		return 0, dberr.New(dberr.ErrorNoDoc, id)
 	}
 
-	// todo
+	// 计算doc结束地址，并确认有效
 	if docEnd := id + DocHeader + int(currentDocRoom); docEnd >= col.Size {
 		return 0, dberr.New(dberr.ErrorNoDoc, id)
 	}
@@ -162,21 +178,20 @@ func (col *Collection) Update(id int, data []byte) (newID int, err error) {
 	}
 
 	// No enough room - re-insert the document
-	// 如果新数据长度 > 旧数据长度
-	// 直接先删除旧数据
+	// 如果新数据长度 > 旧数据长度，直接先删除旧数据，再添加新数据
 	col.Delete(id)
-	// 再添加新数据
 	return col.Insert(data)
 }
 
 // Delete a document by ID.
+// 删除 doc
 func (col *Collection) Delete(id int) error {
 	// 验证id合法
 	if id < 0 || id > col.Used-DocHeader || col.Buf[id] != 1 {
 		return dberr.New(dberr.ErrorNoDoc, id)
 	}
 
-	// 修改标志位，1=>，已删除
+	// 修改标志位，为0，已删除
 	if col.Buf[id] == 1 {
 		col.Buf[id] = 0
 	}
